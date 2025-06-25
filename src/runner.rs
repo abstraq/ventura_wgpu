@@ -23,7 +23,8 @@ impl ApplicationHandler for VenturaRunner {
 			.create_window(window_attributes)
 			.expect("Failed to create window.");
 
-		self.render_context = Some(RenderContext::new(window));
+		let render_context = RenderContext::init(window);
+		self.render_context = Some(render_context);
 	}
 
 	fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {

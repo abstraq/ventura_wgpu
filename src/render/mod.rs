@@ -1,23 +1,41 @@
+mod vertex;
+
 use std::sync::Arc;
 
-use wgpu::{Device, Queue, Surface, SurfaceConfiguration, SurfaceError};
+use glam::{Vec2, Vec3};
+use wgpu::util::{BufferInitDescriptor, DeviceExt};
+use wgpu::{Instance, SurfaceConfiguration, SurfaceError};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use crate::render::vertex::Vertex;
+
 pub struct RenderContext {
-	surface: Surface<'static>,
-	device: Device,
-	queue: Queue,
-	surface_config: SurfaceConfiguration,
+	surface: wgpu::Surface<'static>,
+	device: wgpu::Device,
+	queue: wgpu::Queue,
+	surface_config: wgpu::SurfaceConfiguration,
+	render_pipeline: wgpu::RenderPipeline,
+	vertex_buffer: wgpu::Buffer,
+	index_buffer: wgpu::Buffer,
 	pub window: Arc<Window>,
 }
 
+const VERTEX_ARRAY: &[Vertex] = &[
+	Vertex { position: Vec2::new(-1.0, 1.0), color: Vec3::new(1.0, 0.0, 0.0) },
+	Vertex { position: Vec2::new(-1.0, -1.0), color: Vec3::new(0.0, 1.0, 0.0) },
+	Vertex { position: Vec2::new(0.0, -1.0), color: Vec3::new(0.0, 0.0, 1.0) },
+	Vertex { position: Vec2::new(0.0, 1.0), color: Vec3::new(0.0, 0.0, 1.0) },
+];
+
+const INDEX_ARRAY: &[u16; 6] = &[0, 1, 2, 2, 3, 0];
+
 impl RenderContext {
-	pub fn new(window: Window) -> Self {
+	pub fn init(window: Window) -> Self {
 		let window = Arc::new(window);
 		let window_size = window.inner_size();
 
-		let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+		let instance = Instance::new(&wgpu::InstanceDescriptor {
 			backends: wgpu::Backends::PRIMARY,
 			flags: wgpu::InstanceFlags::empty(),
 			..Default::default()
@@ -34,8 +52,16 @@ impl RenderContext {
 		}))
 		.expect("No suitable adapter found for WGPU.");
 
+		let adapter_info = adapter.get_info();
+		tracing::info!(
+			"Using {} backend on {} with {}({}) driver.",
+			&adapter_info.backend,
+			&adapter_info.name,
+			&adapter_info.driver,
+			&adapter_info.driver_info,
+		);
+
 		let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-			label: None,
 			required_features: wgpu::Features::empty(),
 			required_limits: wgpu::Limits::default(),
 			..Default::default()
@@ -61,9 +87,80 @@ impl RenderContext {
 			view_formats: vec![],
 		};
 
+		let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
+			label: Some("Vertex Buffer"),
+			contents: bytemuck::cast_slice(VERTEX_ARRAY),
+			usage: wgpu::BufferUsages::VERTEX,
+		});
+
+		let index_buffer = device.create_buffer_init(&BufferInitDescriptor {
+			label: Some("Index Buffer"),
+			contents: bytemuck::cast_slice(INDEX_ARRAY),
+			usage: wgpu::BufferUsages::INDEX,
+		});
+
+		let shader = device.create_shader_module(wgpu::include_wgsl!("./shaders/shader.wgsl"));
+
+		let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+			label: Some("Render Pipeline Layout"),
+			bind_group_layouts: &[],
+			push_constant_ranges: &[],
+		});
+
+		let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+			label: Some("Render Pipeline"),
+			layout: Some(&render_pipeline_layout),
+			vertex: wgpu::VertexState {
+				module: &shader,
+				compilation_options: Default::default(),
+				entry_point: None,
+				buffers: &[wgpu::VertexBufferLayout {
+					array_stride: size_of::<Vertex>() as u64,
+					step_mode: wgpu::VertexStepMode::Vertex,
+					attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3],
+				}],
+			},
+			fragment: Some(wgpu::FragmentState {
+				module: &shader,
+				compilation_options: Default::default(),
+				entry_point: None,
+				targets: &[Some(wgpu::ColorTargetState {
+					format: surface_config.format,
+					blend: Some(wgpu::BlendState::REPLACE),
+					write_mask: wgpu::ColorWrites::ALL,
+				})],
+			}),
+			primitive: wgpu::PrimitiveState {
+				topology: wgpu::PrimitiveTopology::TriangleList,
+				front_face: wgpu::FrontFace::Ccw,
+				polygon_mode: wgpu::PolygonMode::Fill,
+				cull_mode: Some(wgpu::Face::Back),
+				strip_index_format: None,
+				unclipped_depth: false,
+				conservative: false,
+			},
+			multisample: wgpu::MultisampleState {
+				count: 1,
+				mask: !0,
+				alpha_to_coverage_enabled: false,
+			},
+			multiview: None,
+			depth_stencil: None,
+			cache: None,
+		});
+
 		surface.configure(&device, &surface_config);
 
-		Self { surface, device, queue, surface_config, window }
+		Self {
+			surface,
+			device,
+			queue,
+			surface_config,
+			vertex_buffer,
+			index_buffer,
+			render_pipeline,
+			window,
+		}
 	}
 
 	pub fn draw(&mut self) -> Result<(), SurfaceError> {
@@ -78,13 +175,13 @@ impl RenderContext {
 			.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
 
 		{
-			let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+			let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 				label: Some("Render Pass"),
 				color_attachments: &[Some(wgpu::RenderPassColorAttachment {
 					view: &texture_view,
 					resolve_target: None,
 					ops: wgpu::Operations {
-						load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.1, g: 0.2, b: 0.3, a: 1.0 }),
+						load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.01, g: 0.01, b: 0.01, a: 1.0 }),
 						store: wgpu::StoreOp::Store,
 					},
 				})],
@@ -92,6 +189,11 @@ impl RenderContext {
 				timestamp_writes: None,
 				occlusion_query_set: None,
 			});
+
+			render_pass.set_pipeline(&self.render_pipeline);
+			render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+			render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+			render_pass.draw_indexed(0..6, 0, 0..1);
 		}
 
 		self.queue.submit([encoder.finish()]);
