@@ -13,3 +13,7 @@ max_width = 104
 single_line_if_else_max_width = 96
 struct_lit_width = 80
 wrap_comments = true
+
+use_small_heuristics = "Max"
+fn_call_width = 40
+chain_width = 60
