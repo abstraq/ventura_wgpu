@@ -1,3 +1,4 @@
+mod camera;
 mod vertex;
 
 use std::sync::Arc;
@@ -8,6 +9,7 @@ use wgpu::{Instance, SurfaceConfiguration, SurfaceError};
 use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
+use crate::render::camera::OrthographicCamera;
 use crate::render::vertex::Vertex;
 
 pub struct RenderContext {
@@ -15,17 +17,19 @@ pub struct RenderContext {
 	device: wgpu::Device,
 	queue: wgpu::Queue,
 	surface_config: wgpu::SurfaceConfiguration,
-	render_pipeline: wgpu::RenderPipeline,
+	camera: OrthographicCamera,
+	camera_bind_group: wgpu::BindGroup,
 	vertex_buffer: wgpu::Buffer,
 	index_buffer: wgpu::Buffer,
+	render_pipeline: wgpu::RenderPipeline,
 	pub window: Arc<Window>,
 }
 
 const VERTEX_ARRAY: &[Vertex] = &[
-	Vertex { position: Vec2::new(-1.0, 1.0), color: Vec3::new(1.0, 0.0, 0.0) },
-	Vertex { position: Vec2::new(-1.0, -1.0), color: Vec3::new(0.0, 1.0, 0.0) },
-	Vertex { position: Vec2::new(0.0, -1.0), color: Vec3::new(0.0, 0.0, 1.0) },
-	Vertex { position: Vec2::new(0.0, 1.0), color: Vec3::new(0.0, 0.0, 1.0) },
+	Vertex { position: Vec2::new(0.0, 0.0), color: Vec3::new(1.0, 0.0, 0.0) },
+	Vertex { position: Vec2::new(0.0, 48.0), color: Vec3::new(0.0, 1.0, 0.0) },
+	Vertex { position: Vec2::new(48.0, 48.0), color: Vec3::new(0.0, 0.0, 1.0) },
+	Vertex { position: Vec2::new(48.0, 0.0), color: Vec3::new(0.0, 0.0, 1.0) },
 ];
 
 const INDEX_ARRAY: &[u16; 6] = &[0, 1, 2, 2, 3, 0];
@@ -87,6 +91,32 @@ impl RenderContext {
 			view_formats: vec![],
 		};
 
+		let camera = OrthographicCamera::new(&device, window_size.width, window_size.height);
+
+		let camera_bind_group_layout =
+			device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+				label: Some("Camera Uniform Bind Group Layout"),
+				entries: &[wgpu::BindGroupLayoutEntry {
+					binding: 0,
+					visibility: wgpu::ShaderStages::VERTEX,
+					ty: wgpu::BindingType::Buffer {
+						ty: wgpu::BufferBindingType::Uniform,
+						has_dynamic_offset: false,
+						min_binding_size: None,
+					},
+					count: None,
+				}],
+			});
+
+		let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+			label: Some("Camera Uniform Bind Group"),
+			layout: &camera_bind_group_layout,
+			entries: &[wgpu::BindGroupEntry {
+				binding: 0,
+				resource: camera.buffer.as_entire_binding(),
+			}],
+		});
+
 		let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
 			label: Some("Vertex Buffer"),
 			contents: bytemuck::cast_slice(VERTEX_ARRAY),
@@ -103,7 +133,7 @@ impl RenderContext {
 
 		let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
 			label: Some("Render Pipeline Layout"),
-			bind_group_layouts: &[],
+			bind_group_layouts: &[&camera_bind_group_layout],
 			push_constant_ranges: &[],
 		});
 
@@ -156,6 +186,8 @@ impl RenderContext {
 			device,
 			queue,
 			surface_config,
+			camera,
+			camera_bind_group,
 			vertex_buffer,
 			index_buffer,
 			render_pipeline,
@@ -191,6 +223,7 @@ impl RenderContext {
 			});
 
 			render_pass.set_pipeline(&self.render_pipeline);
+			render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
 			render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 			render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 			render_pass.draw_indexed(0..6, 0, 0..1);
@@ -203,10 +236,13 @@ impl RenderContext {
 	}
 
 	pub fn resize(&mut self, new_size: PhysicalSize<u32>) {
-		if new_size.width > 0 && new_size.height > 0 {
-			self.surface_config.width = new_size.width;
-			self.surface_config.height = new_size.height;
+		let width = new_size.width;
+		let height = new_size.height;
+		if width > 0 && height > 0 {
+			self.surface_config.width = width;
+			self.surface_config.height = height;
 			self.surface.configure(&self.device, &self.surface_config);
+			self.camera.resize(&self.queue, width, height);
 		}
 	}
 }
