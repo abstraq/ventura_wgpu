@@ -1,10 +1,9 @@
-mod camera;
+pub(crate) mod camera;
 mod context;
-mod pipeline;
+mod sprite;
 mod texture;
+mod util;
 mod vertex;
 
 pub(crate) use self::context::RenderContext;
-pub(crate) use self::pipeline::SpritePipeline;
-pub(crate) use self::texture::Texture;
-pub(crate) use self::vertex::VertexData;
+pub(crate) use self::sprite::Sprite;

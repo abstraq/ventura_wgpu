@@ -1,13 +1,10 @@
 use bytemuck::{Pod, Zeroable};
-use glam::{Vec2, Vec3};
+use glam::Vec2;
 
-/// Data that is passed to the vertex shader.
-///
-/// `clip_position` represents the position of the vertex in model space.
-/// `texture_coordinates` are passed to the sampler.
+/// Represents vertex information that will be uploaded to the GPU.
 #[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable, Debug)]
-pub struct VertexData {
-	pub clip_position: Vec3,
+#[derive(Pod, Zeroable, Copy, Clone, Debug)]
+pub struct Vertex {
+	pub position: Vec2,
 	pub texture_coordinates: Vec2,
 }
